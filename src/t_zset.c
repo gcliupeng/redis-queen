@@ -982,7 +982,23 @@ void zaddGenericCommand(redisClient *c, int incr) {
 }
 
 void zaddCommand(redisClient *c) {
-    zaddGenericCommand(c,0);
+    // added by liupeng
+    robj * command=c->argv[0];
+    if(!strcasecmp(command->ptr,"queen")){
+           robj **new =zmalloc(sizeof(robj*)*(c->argc+1));
+           for(int i=1;i<c->argc;i++){
+                new[i+1]=c->argv[i];
+           }
+           new[1]=createObject(REDIS_STRING,sdsnew("queen"));
+           new[0]=createObject(REDIS_STRING,sdsnew("zadd"));
+           sdsfree(c->argv[0]->ptr);
+           zfree(c->argv);
+           c->argc++;
+           c->argv=new;
+           zaddGenericCommand(c,0);
+    }else{
+       zaddGenericCommand(c,0);
+    } 
 }
 
 void zincrbyCommand(redisClient *c) {
