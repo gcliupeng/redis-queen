@@ -62,6 +62,8 @@
 #include "version.h" /* Version macro */
 #include "util.h"    /* Misc functions useful in many places */
 
+#define QUEEN  "queen"
+
 /* Error codes */
 #define REDIS_OK                0
 #define REDIS_ERR               -1
@@ -1216,6 +1218,8 @@ void enableWatchdog(int period);
 void disableWatchdog(void);
 void watchdogScheduleSignal(int period);
 void redisLogHexDump(int level, char *descr, void *value, size_t len);
+
+void queenProcess();
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

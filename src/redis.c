@@ -49,7 +49,10 @@
 #include <math.h>
 #include <sys/resource.h>
 #include <sys/utsname.h>
-
+#include <curl/curl.h>
+#include <curl/multi.h>
+CURL *curl_handle;
+CURLcode res;
 /* Our shared "common" objects */
 
 struct sharedObjectsStruct shared;
@@ -1075,6 +1078,98 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
+    // process messagequeen by liupeng
+    queenProcess();
+}
+
+/* =========================== Redis Queen ======================== */
+unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec range);
+int zslParseRange(robj *min, robj *max, zrangespec *spec);
+struct redisClient * createFakeClient();
+void removeQueen(long min,long max){
+    struct redisClient *fakeClient = createFakeClient();
+    int argc=4;
+    struct redisCommand *cmd=NULL;
+    robj **argv=zmalloc(sizeof(robj*)*4);
+    argv[0]=createObject(REDIS_STRING,sdsnew("ZREMRANGEBYSCORE"));
+    argv[1]=createObject(REDIS_STRING,sdsnew("queen"));
+    argv[2]=createStringObjectFromLongLong(min);
+    argv[3]=createStringObjectFromLongLong(max);
+    cmd = lookupCommand(argv[0]->ptr);
+    fakeClient->argc = argc;
+    fakeClient->argv = argv;
+    cmd->proc(fakeClient);
+}
+
+void queenProcess(){
+    zrangespec range;
+    robj *key = createObject(REDIS_STRING,sdsnew("queen"));
+    robj *zobj;
+    long min=0,max=time(NULL);
+    if (zslParseRange(createStringObjectFromLongLong(min),createStringObjectFromLongLong(max),&range) != REDIS_OK) {
+        return;
+    }
+    /* Ok, lookup the key and get the range */
+    if ((zobj = lookupKeyWrite(&server.db[0],key)) == NULL||zobj->type!=REDIS_ZSET) return;
+
+    if (zobj->encoding == REDIS_ENCODING_ZIPLIST) {
+        unsigned char *zl = zobj->ptr;
+        unsigned char *eptr, *sptr;
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vlong;
+        double score;
+
+        eptr = zzlFirstInRange(zl,range);
+
+        /* No "first" element in the specified interval. */
+        if (eptr == NULL) {
+            return;
+        }
+
+        /* Get score pointer for the first element. */
+        sptr = ziplistNext(zl,eptr);
+
+        while (eptr ) {
+            score = zzlGetScore(sptr);
+            /* We know the element exists, so ziplistGet should always succeed */
+            ziplistGet(eptr,&vstr,&vlen,&vlong);
+            sds content=sdsnewlen(vstr,vlen);
+            redisLog(LOG_NOTICE,content);
+            redisLog(LOG_NOTICE,"%f",score);
+            zzlNext(zl,&eptr,&sptr);
+            //do something();
+            curl_handle = curl_easy_init();
+            curl_easy_setopt(curl_handle, CURLOPT_URL, content);
+            res = curl_easy_perform(curl_handle);
+            if(CURLE_OK == res) {
+                char *ct;
+                /* http://curl.haxx.se/libcurl/c/curl_easy_getinfo.html */
+                res = curl_easy_getinfo(curl_handle, CURLINFO_CONTENT_TYPE, &ct);
+                if((CURLE_OK == res) && ct)
+                redisLog(LOG_NOTICE,"We received Content-Type: %s\n", ct);
+            }
+
+            /* always cleanup */
+            /* http://curl.haxx.se/libcurl/c/curl_easy_cleanup.html */
+            curl_easy_cleanup(curl_handle);
+        }
+    } else if (zobj->encoding == REDIS_ENCODING_SKIPLIST) {
+        zset *zs = zobj->ptr;
+        zskiplist *zsl = zs->zsl;
+        zskiplistNode *ln;
+        ln = zslFirstInRange(zsl,range);
+
+        while (ln ) {
+            redisLog(LOG_NOTICE,sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr)));
+            redisLog(LOG_NOTICE,"%f",ln->score);
+            ln = ln->level[0].forward;
+            }
+        
+    } else {
+        redisPanic("Unknown sorted set encoding");
+    }
+    removeQueen(min,max);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2638,7 +2733,7 @@ int main(int argc, char **argv) {
     dictSetHashFunctionSeed(tv.tv_sec^tv.tv_usec^getpid());
     server.sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
-
+    curl_global_init(CURL_GLOBAL_ALL);
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
