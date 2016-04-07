@@ -52,8 +52,11 @@
 #include <curl/curl.h>
 #include <curl/multi.h>
 #include "cJSON.h"
-CURL *curl_handle;
 CURLcode res;
+pthread_t *queen_thread;
+list * queen_list;
+pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condition=PTHREAD_MUTEX_INITIALIZER;
 /* Our shared "common" objects */
 
 struct sharedObjectsStruct shared;
@@ -1106,8 +1109,8 @@ void removeQueen(long min,long max){
 
 size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdata){
     (void)ptr;  /* unused */
-  (void)userdata; /* unused */
-  return (size_t)(size * nmemb);
+    (void)userdata; /* unused */
+    return (size_t)(size * nmemb);
 }
 
 void queenProcess(){
@@ -1138,138 +1141,34 @@ void queenProcess(){
 
         /* Get score pointer for the first element. */
         sptr = ziplistNext(zl,eptr);
-        char fields[500]="";
         while (eptr ) {
             score = zzlGetScore(sptr);
             /* We know the element exists, so ziplistGet should always succeed */
             ziplistGet(eptr,&vstr,&vlen,&vlong);
-            //char tmp[500]="";
             sds content=sdsnewlen(vstr,vlen);
-            //snprintf(tmp,vlen+1,vstr);
-            redisLog(LOG_NOTICE,content);
-            redisLog(LOG_NOTICE,"%f",score);
-            //json parse
-            cJSON *json;
-            json=cJSON_Parse(content);
-            if (!json) {
-                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
-                continue;
-            }
-            char url[200]="";
-            sprintf(url,cJSON_GetObjectItem(json,"url")->valuestring);
-            if(!strlen(url)){
-                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
-                continue;
-            }
+            //redisLog(LOG_NOTICE,content);
+            //redisLog(LOG_NOTICE,"%f",score);
+            //插入队列中,此处加锁是否会影响性能？？
+            pthread_mutex_lock(&mutex); 
+            listAddNodeTail(queen_list, content);
+            pthread_mutex_unlock(&mutex);
+            pthread_cond_signal(&condition);
             zzlNext(zl,&eptr,&sptr);
-            //do something();
-            curl_handle = curl_easy_init();
-            curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_callback);
-            char * method="get";
-            if(cJSON_GetObjectItem(json,"method")){
-                method=cJSON_GetObjectItem(json,"method")->valuestring;
-            }
-            
-            cJSON * params=cJSON_GetObjectItem(json,"params");
-            printf("%s\n",cJSON_Print(params));
-            if(params){
-                cJSON * child=params->child;
-                while(child){
-                    sprintf(fields+strlen(fields),"%s=%s&",child->string,child->valuestring);
-                    //printf("%s=%s\n",child->string,child->valuestring);
-                    child=child->next;
-                }
-                fields[strlen(fields)-1]=0;
-                printf("%s\n",fields);
-            }
-            
-            if(method&&!strcasecmp(method,"post")){
-                curl_easy_setopt(curl_handle, CURLOPT_POST, 1);
-                curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, fields); 
-            }else{
-                sprintf(url+strlen(url),"?");
-                sprintf(url+strlen(url),fields);
-            }
-            
-            curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-            res = curl_easy_perform(curl_handle);
-            if(CURLE_OK == res) {
-                char *ct;
-                /* http://curl.haxx.se/libcurl/c/curl_easy_getinfo.html */
-                res = curl_easy_getinfo(curl_handle, CURLINFO_CONTENT_TYPE, &ct);
-                if((CURLE_OK == res) && ct)
-                redisLog(LOG_NOTICE,"We received Content-Type: %s\n", ct);
-            }else{
-                printf("%s\n","error");
-            }
-
-            /* always cleanup */
-            /* http://curl.haxx.se/libcurl/c/curl_easy_cleanup.html */
-            curl_easy_cleanup(curl_handle);
         }
     } else if (zobj->encoding == REDIS_ENCODING_SKIPLIST) {
         zset *zs = zobj->ptr;
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
         ln = zslFirstInRange(zsl,range);
-        char fields[500]="";
         while (ln ) {
-            redisLog(LOG_NOTICE,sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr)));
-            redisLog(LOG_NOTICE,"%f",ln->score);
+            //redisLog(LOG_NOTICE,sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr)));
+            //redisLog(LOG_NOTICE,"%f",ln->score);
             sds content=sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr));
-            cJSON *json;
-            json=cJSON_Parse(content);
-            if (!json) {
-                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
-                ln = ln->level[0].forward;
-                continue;
-            }
-            char url[200]="";
-            sprintf(url,cJSON_GetObjectItem(json,"url")->valuestring);
-            //printf("%s\n",url);
-            if(!strlen(url)){
-                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
-                ln = ln->level[0].forward;
-                continue;
-            }
-            curl_handle = curl_easy_init();
-            curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_callback);
-            char * method="get";
-            if(cJSON_GetObjectItem(json,"method")){
-                method=cJSON_GetObjectItem(json,"method")->valuestring;
-            }
-            
-            cJSON * params=cJSON_GetObjectItem(json,"params");
-            if(params){
-                cJSON * child=params->child;
-                while(child){
-                    sprintf(fields+strlen(fields),"%s=%s&",child->string,child->valuestring);
-                    //printf("%s=%s\n",child->string,child->valuestring);
-                    child=child->next;
-                }
-                fields[strlen(fields)-1]=0;
-                printf("%s\n",fields);
-            }
-            
-            if(method&&!strcasecmp(method,"post")){
-                curl_easy_setopt(curl_handle, CURLOPT_POST, 1);
-                curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, fields); 
-            }else{
-                sprintf(url+strlen(url),"?");
-                sprintf(url+strlen(url),fields);
-            }
-            printf("%s\n",url );
-            curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-            res = curl_easy_perform(curl_handle);
-            if(CURLE_OK == res) {
-                char *ct;
-                /* http://curl.haxx.se/libcurl/c/curl_easy_getinfo.html */
-                res = curl_easy_getinfo(curl_handle, CURLINFO_CONTENT_TYPE, &ct);
-                if((CURLE_OK == res) && ct)
-                redisLog(LOG_NOTICE,"We received Content-Type: %s\n", ct);
-            }else{
-                printf("%s\n","error" );
-            }
+            //插入队列中,此处加锁是否会影响性能？？
+            pthread_mutex_lock(&mutex); 
+            listAddNodeTail(queen_list, content);
+            pthread_mutex_unlock(&mutex);
+            pthread_cond_signal(&condition);
             ln = ln->level[0].forward;
         }
         
@@ -1277,6 +1176,76 @@ void queenProcess(){
         redisPanic("Unknown sorted set encoding");
     }
     removeQueen(min,max);
+}
+
+static void *queen_maintenance_thread(void *arg){
+        while(1){
+            char fields[500]="";
+            pthread_mutex_lock(&mutex); 
+            while(queen_list->len==0)
+            {
+                pthread_cond_wait(&condition, &mutex);
+            }
+            listNode *node=queen_list->head;
+            sds content=sdsnew(node->value);
+            listDelNode(queen_list,node);
+            pthread_mutex_unlock(&mutex);
+            printf("%s\n",content);
+            
+            //curl excuation
+            cJSON *json;
+            json=cJSON_Parse(content);
+            if (!json) {
+                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
+                continue;
+            }
+            char url[200]="";
+            sprintf(url,cJSON_GetObjectItem(json,"url")->valuestring);
+            if(!strlen(url)){
+                printf("Error before: [%s]\n",cJSON_GetErrorPtr());
+                continue;
+            }
+            //continue;
+           CURL * curl_handle = curl_easy_init();
+            curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_callback);
+            char * method="get";
+            if(cJSON_GetObjectItem(json,"method")){
+                method=cJSON_GetObjectItem(json,"method")->valuestring;
+            }
+            
+            cJSON * params=cJSON_GetObjectItem(json,"params");
+            if(params){
+               // printf("%s\n",cJSON_Print(params));
+                cJSON * child=params->child;
+                while(child){
+                    sprintf(fields+strlen(fields),"%s=%s&",child->string,child->valuestring);
+                    child=child->next;
+                }
+                fields[strlen(fields)-1]=0;
+                printf("%s\n",fields);
+            }
+            
+            if(method&&!strcasecmp(method,"post")){
+                curl_easy_setopt(curl_handle, CURLOPT_POST, 1);
+                curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, fields); 
+            }else{
+                sprintf(url+strlen(url),"?");
+                sprintf(url+strlen(url),fields);
+            }
+            curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+            res = curl_easy_perform(curl_handle);
+            if(CURLE_OK == res) {
+                char *ct;
+                res = curl_easy_getinfo(curl_handle, CURLINFO_CONTENT_TYPE, &ct);
+                if((CURLE_OK == res) && ct)
+                redisLog(LOG_NOTICE,"We received Content-Type: %s\n", ct);
+            }else{
+                printf("%s\n","error");
+            }
+
+            curl_easy_cleanup(curl_handle);
+        }
+        return NULL;
 }
 
 /* =========================== Server initialization ======================== */
@@ -2841,6 +2810,12 @@ int main(int argc, char **argv) {
     server.sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
     curl_global_init(CURL_GLOBAL_ALL);
+    //pthread_t 
+    queen_list=listCreate();
+    queen_thread=(pthread_t *) malloc(sizeof(pthread_t)*5);
+    for(int i=0;i<5;i++){
+        pthread_create(queen_thread+i, NULL,queen_maintenance_thread, NULL);
+    }
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
