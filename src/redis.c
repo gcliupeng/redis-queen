@@ -56,7 +56,9 @@ CURLcode res;
 pthread_t *queen_thread;
 list * queen_list;
 pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
+pthread_t t;
 pthread_cond_t condition=PTHREAD_MUTEX_INITIALIZER;
+int isBackRunning;
 /* Our shared "common" objects */
 
 struct sharedObjectsStruct shared;
@@ -1085,7 +1087,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
     // process messagequeen by liupeng
-    queenProcess();
+    //queenProcess();
 }
 
 /* =========================== Redis Queen ======================== */
@@ -1113,16 +1115,21 @@ size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdata){
     return (size_t)(size * nmemb);
 }
 
-void queenProcess(){
+void queenProcessReal(){
+    isBackRunning=1;
     zrangespec range;
     robj *key = createObject(REDIS_STRING,sdsnew("queen"));
     robj *zobj;
     long min=0,max=time(NULL);
     if (zslParseRange(createStringObjectFromLongLong(min),createStringObjectFromLongLong(max),&range) != REDIS_OK) {
-        return;
+        isBackRunning=0;
+        return ;
+    }
+    if(dictIsRehashing(server.db[0].dict)){
+        isBackRunning=0;return 1000;
     }
     /* Ok, lookup the key and get the range */
-    if ((zobj = lookupKeyWrite(&server.db[0],key)) == NULL||zobj->type!=REDIS_ZSET) return;
+    if ((zobj = lookupKeyWrite(&server.db[0],key)) == NULL||zobj->type!=REDIS_ZSET) {isBackRunning=0;return 1000;}
 
     if (zobj->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *zl = zobj->ptr;
@@ -1136,7 +1143,8 @@ void queenProcess(){
 
         /* No "first" element in the specified interval. */
         if (eptr == NULL) {
-            return;
+            isBackRunning=0;
+            return ;
         }
         pthread_mutex_lock(&mutex); 
         /* Get score pointer for the first element. */
@@ -1181,9 +1189,29 @@ void queenProcess(){
         redisPanic("Unknown sorted set encoding");
     }
     removeQueen(min,max);
+    isBackRunning=0;
+    return ;
+}
+
+int queenProcess(){
+    printf("%s\n","shit");
+    printf("%d\n", isBackRunning);
+    if(isBackRunning){
+        printf("%s\n","fuck " );
+        return 1000;
+    }
+    else{
+        int r=pthread_create(&t, NULL,queenProcessReal, NULL);
+        if(r==-1){
+            printf("%s\n","cuowo " );
+        }
+        return 1000;
+    }
 }
 
 static void *queen_maintenance_thread(void *arg){
+        curl_global_init(CURL_GLOBAL_ALL);
+        CURL * curl_handle = curl_easy_init();
         while(1){
             char fields[500]="";
             pthread_mutex_lock(&mutex); 
@@ -1210,8 +1238,11 @@ static void *queen_maintenance_thread(void *arg){
                 printf("Error before: [%s]\n",cJSON_GetErrorPtr());
                 continue;
             }
-            //continue;
-           CURL * curl_handle = curl_easy_init();
+            cJSON_Delete(json);
+            sdsfree(content);
+
+            continue;
+            
             curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_callback);
             char * method="get";
             if(cJSON_GetObjectItem(json,"method")){
@@ -1247,9 +1278,10 @@ static void *queen_maintenance_thread(void *arg){
             }else{
                 printf("%s\n","error");
             }
-
-            curl_easy_cleanup(curl_handle);
+            cJSON_Delete(json);
+            sdsfree(content);
         }
+        curl_easy_cleanup(curl_handle);
         return NULL;
 }
 
@@ -2814,11 +2846,11 @@ int main(int argc, char **argv) {
     dictSetHashFunctionSeed(tv.tv_sec^tv.tv_usec^getpid());
     server.sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
-    curl_global_init(CURL_GLOBAL_ALL);
+    
     //pthread_t 
     queen_list=listCreate();
-    queen_thread=(pthread_t *) malloc(sizeof(pthread_t)*5);
-    for(int i=0;i<5;i++){
+    queen_thread=(pthread_t *) malloc(sizeof(pthread_t)*50);
+    for(int i=0;i<50;i++){
         pthread_create(queen_thread+i, NULL,queen_maintenance_thread, NULL);
     }
     /* We need to init sentinel right now as parsing the configuration file
@@ -2898,7 +2930,7 @@ int main(int argc, char **argv) {
     if (server.maxmemory > 0 && server.maxmemory < 1024*1024) {
         redisLog(REDIS_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
-
+    aeCreateTimeEvent(server.el, 1, queenProcess, NULL, NULL);
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
