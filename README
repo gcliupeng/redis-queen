@@ -11,4 +11,4 @@ make & make install
 提供了一个新命令queen
 redis-cli-> queen 100 "{\"url\":\"http://www.baidu.com\",\"method\":\"get\",\"params\":{\"age\":\"liupeng\",\"sex\":\"男\"}}"
 以上命令意思是，100秒后异步调用http://www.baidu.com ，使用get 方式，带两个参数age和sex
-
+（程序使用了libcurl，需提前安装libcurl）
