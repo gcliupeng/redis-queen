@@ -1,7 +1,14 @@
-## redis-queen 一个redis实现的异步队列系统
+# redis-queen 
+一个redis实现的异步队列系统
 
 背景：
-在didi公司工作时，发现这里大量使用异步队列系统，定时调用某些接口。这边的异步系统包括ngnix、redis、php三部分。nginx+php提供一个crud的接口，
-向redis的有序列表里插入数据（zadd），php编写的deamon从redis取出数据，解析，使用http调用接口。系统由三部分组成，尤其是deamon程序由php来写
-，比较怪异。本系统集成于redis内部，使用redis自身的事件循环，对外提供了一个queen命令。
+在didi公司工作时，发现这里大量使用异步队列系统，定时调用某些接口。这边的异步系统包括ngnix、redis、php三部分。nginx+php提供一个crud的接口，向redis的有序列表里插入数据（zadd），php编写的deamon从redis取出数据，解析，使用http调用接口。系统由三部分组成，尤其是deamon程序由php来写，比较怪异。本系统集成于redis内部，使用redis自身的事件循环，对外提供了一个queen命令。
+
+安装：
+make & make install
+
+使用方式：
+提供了一个新命令queen
+redis-cli-> queen 100 "{\"url\":\"http://www.baidu.com\",\"method\":\"get\",\"params\":{\"age\":\"liupeng\",\"sex\":\"男\"}}"
+以上命令意思是，100秒后异步调用http://www.baidu.com ，使用get 方式，带两个参数age和sex
 
