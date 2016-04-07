@@ -1138,7 +1138,7 @@ void queenProcess(){
         if (eptr == NULL) {
             return;
         }
-
+        pthread_mutex_lock(&mutex); 
         /* Get score pointer for the first element. */
         sptr = ziplistNext(zl,eptr);
         while (eptr ) {
@@ -1149,28 +1149,33 @@ void queenProcess(){
             //redisLog(LOG_NOTICE,content);
             //redisLog(LOG_NOTICE,"%f",score);
             //插入队列中,此处加锁是否会影响性能？？
-            pthread_mutex_lock(&mutex); 
+            //pthread_mutex_lock(&mutex); 
             listAddNodeTail(queen_list, content);
-            pthread_mutex_unlock(&mutex);
-            pthread_cond_signal(&condition);
+            // pthread_mutex_unlock(&mutex);
+            // pthread_cond_signal(&condition);
             zzlNext(zl,&eptr,&sptr);
         }
+        pthread_mutex_unlock(&mutex);
+        pthread_cond_signal(&condition);
     } else if (zobj->encoding == REDIS_ENCODING_SKIPLIST) {
         zset *zs = zobj->ptr;
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
         ln = zslFirstInRange(zsl,range);
+        pthread_mutex_lock(&mutex); 
         while (ln ) {
             //redisLog(LOG_NOTICE,sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr)));
             //redisLog(LOG_NOTICE,"%f",ln->score);
             sds content=sdsnewlen(ln->obj->ptr,sdslen(ln->obj->ptr));
             //插入队列中,此处加锁是否会影响性能？？
-            pthread_mutex_lock(&mutex); 
+            //pthread_mutex_lock(&mutex); 
             listAddNodeTail(queen_list, content);
-            pthread_mutex_unlock(&mutex);
-            pthread_cond_signal(&condition);
+            //pthread_mutex_unlock(&mutex);
+            //pthread_cond_signal(&condition);
             ln = ln->level[0].forward;
         }
+        pthread_mutex_unlock(&mutex);
+        pthread_cond_signal(&condition);
         
     } else {
         redisPanic("Unknown sorted set encoding");
